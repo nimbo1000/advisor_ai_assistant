@@ -1,0 +1,40 @@
+{% load custom_tags %}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HubSpot Contacts</title>
+    <style>
+        .note { 
+            border-left: 3px solid #ccc;
+            padding-left: 10px;
+            margin: 10px 0;
+        }
+        .note-date {
+            font-size: 0.8em;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>HubSpot Contacts</h1>
+    {% for contact in contacts %}
+        <div class="contact">
+            <h3>{{ contact.properties.firstname }} {{ contact.properties.lastname }}</h3>
+            <p>Email: {{ contact.properties.email }}</p>
+            
+            <h4>Notes:</h4>
+            {% for note in contact_notes|get_item:contact.id %}
+                <div class="note">
+                    <p>{{ note.content|linebreaksbr }}</p>
+                    <p class="note-date">
+                        {{ note.created_at|date:"M d, Y H:i" }}
+                    </p>
+                </div>
+            {% empty %}
+                <p>No notes found</p>
+            {% endfor %}
+        </div>
+        <hr>
+    {% endfor %}
+</body>
+</html>

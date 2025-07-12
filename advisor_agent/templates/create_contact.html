@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h2>Create New Contact</h2>
+    <form method="post">
+        {% csrf_token %}
+        <div class="row">
+            <div class="col-md-6">
+                <div class="mb-3">
+                    {{ form.firstname.label_tag }}
+                    {{ form.firstname }}
+                    <div class="text-danger">{{ form.firstname.errors }}</div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="mb-3">
+                    {{ form.lastname.label_tag }}
+                    {{ form.lastname }}
+                    <div class="text-danger">{{ form.lastname.errors }}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="mb-3">
+            {{ form.email.label_tag }}
+            {{ form.email }}
+            <div class="text-danger">{{ form.email.errors }}</div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <div class="mb-3">
+                    {{ form.phone.label_tag }}
+                    {{ form.phone }}
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="mb-3">
+                    {{ form.company.label_tag }}
+                    {{ form.company }}
+                </div>
+            </div>
+        </div>
+        
+        <div class="mb-3">
+            {{ form.website.label_tag }}
+            {{ form.website }}
+        </div>
+        
+        <button type="submit" class="btn btn-primary">Create Contact</button>
+        <a href="{% url 'hubspot_contacts' %}" class="btn btn-secondary">Cancel</a>
+    </form>
+</div>
+{% endblock %}

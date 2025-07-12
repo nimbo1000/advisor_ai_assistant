@@ -1,0 +1,54 @@
+# cursorrules for Django Application
+# Reference: See project_description.txt for the full product vision and requirements.
+
+[project]
+type = "django"
+main_entry = "manage.py"
+settings_module = "financial_advisor_ai.settings"
+description_file = "project_description.txt"
+
+[structure]
+apps_dir = "advisor_agent"
+templates_dir = "templates"
+static_dir = "static"
+migrations_dir = "migrations"
+tests_dir = "tests"  # Note: tests are in advisor_agent/tests.py by default
+
+[conventions]
+model_file = "models.py"
+view_file = "views.py"
+form_file = "forms.py"
+admin_file = "admin.py"
+serializer_file = "serializers.py"
+url_file = "urls.py"
+test_file_pattern = "tests.py"
+settings_file = "settings.py"
+
+[naming]
+model_class_suffix = ""
+view_class_suffix = "View"
+form_class_suffix = "Form"
+serializer_class_suffix = "Serializer"
+admin_class_suffix = "Admin"
+test_class_prefix = "Test"
+
+[ignore]
+dirs = [
+    "__pycache__",
+    "venv",
+    "env",
+    ".git",
+    ".idea",
+    ".vscode",
+    "node_modules"
+]
+files = [
+    "*.pyc"
+]
+
+[custom]
+# This project is an AI agent for Financial Advisors integrating Gmail, Google Calendar, and Hubspot.
+# The main interface is a ChatGPT-like chat UI.
+# Features will include Google OAuth, Hubspot OAuth, RAG, tool calling, memory, and proactive actions.
+# Keep structure flexible for future additions: LLM integration, background tasks, webhook/polling handlers, and database models for tasks/memory.
+# See project_description.txt for detailed requirements and use cases. 

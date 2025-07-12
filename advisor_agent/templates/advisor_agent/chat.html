@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Financial Advisor AI Chat</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #f5f6fa;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 600px;
+            margin: 0 auto;
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 2px 16px rgba(0,0,0,0.07);
+            overflow: hidden;
+        }
+        .chat-header {
+            background: #2d3748;
+            color: #fff;
+            padding: 1rem;
+            text-align: center;
+            font-weight: 600;
+            font-size: 1.2rem;
+        }
+        .chat-messages {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            background: #f5f6fa;
+        }
+        .message {
+            max-width: 80%;
+            padding: 0.75rem 1rem;
+            border-radius: 16px;
+            font-size: 1rem;
+            line-height: 1.5;
+            word-break: break-word;
+        }
+        .message.user {
+            align-self: flex-end;
+            background: #3182ce;
+            color: #fff;
+        }
+        .message.bot {
+            align-self: flex-start;
+            background: #e2e8f0;
+            color: #2d3748;
+        }
+        .chat-input {
+            display: flex;
+            padding: 1rem;
+            background: #f5f6fa;
+            border-top: 1px solid #e2e8f0;
+        }
+        .chat-input input {
+            flex: 1;
+            padding: 0.75rem 1rem;
+            border-radius: 24px;
+            border: 1px solid #cbd5e1;
+            font-size: 1rem;
+            outline: none;
+        }
+        .chat-input button {
+            margin-left: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 24px;
+            border: none;
+            background: #3182ce;
+            color: #fff;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .chat-input button:hover {
+            background: #2563eb;
+        }
+        @media (max-width: 700px) {
+            .chat-container {
+                max-width: 100vw;
+                border-radius: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">Financial Advisor AI</div>
+        {% if is_logged_in %}
+            <div style="background:#d1fae5;color:#065f46;padding:0.5rem 1rem;text-align:center;">
+                Logged in as <b>{{ user_name }}</b> ({{ user_email }})
+                <a href="/logout/" style="margin-left:1.5rem;color:#065f46;text-decoration:underline;font-weight:600;">Logout</a>
+            </div>
+        {% else %}
+            <div style="background:#fee2e2;color:#991b1b;padding:0.5rem 1rem;text-align:center;">You are <b>not</b> logged in. <a href="/auth/google/">Log in with Google</a></div>
+        {% endif %}
+        <div class="chat-messages" id="chat-messages"></div>
+        <form class="chat-input" id="chat-form" autocomplete="off">
+            <input type="text" id="chat-input" placeholder="Type your message..." required autofocus />
+            <button type="submit">Send</button>
+        </form>
+    </div>
+    <script>
+        const chatMessages = document.getElementById('chat-messages');
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('chat-input');
+        let socket = null;
+
+        function appendMessage(message, sender) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message ' + sender;
+            msgDiv.textContent = message;
+            chatMessages.appendChild(msgDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+            const wsUrl = `${protocol}://${window.location.host}/ws/chat/`;
+            socket = new WebSocket(wsUrl);
+
+            socket.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                appendMessage(data.message, 'bot');
+            };
+
+            socket.onclose = function(e) {
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        chatForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const message = chatInput.value.trim();
+            if (!message) return;
+            appendMessage(message, 'user');
+            socket.send(JSON.stringify({ 'message': message }));
+            chatInput.value = '';
+        });
+
+        connectWebSocket();
+    </script>
+</body>
+</html> 
