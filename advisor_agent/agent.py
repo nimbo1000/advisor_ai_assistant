@@ -1,7 +1,6 @@
 from langchain.agents import initialize_agent, Tool
 from langchain.agents import AgentType
 from .llm import get_llm
-from .vectorstore import retrieve_relevant_context
 from .tools import TOOLS as TOOL_DEFS, schedule_calendar_event, send_email
 
 def schedule_calendar_event_wrapper(args, creds_data=None):
