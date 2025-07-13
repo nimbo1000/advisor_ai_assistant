@@ -18,6 +18,9 @@ from .models import HubspotIntegration
 from datetime import datetime, timedelta
 from django.contrib.auth import get_user_model, login
 from .forms import ContactForm, NoteForm
+import html2text
+from .vectorstore import add_documents_to_vectorstore
+from google.auth.exceptions import RefreshError
 # Create your views here.
 
 def chat_view(request):
@@ -102,6 +105,7 @@ def google_auth_callback(request):
         'refresh_token': flow.credentials.refresh_token,
         'token_uri': flow.credentials.token_uri,
         'client_id': flow.credentials.client_id,
+        "client_secret": settings.GOOGLE_OAUTH2_CLIENT_SECRET,
         'scopes': flow.credentials.scopes,
         'id_token': id_token,
         'id_token_decoded': id_token_decoded,
@@ -112,23 +116,55 @@ def google_auth_callback(request):
     request.session['user_email'] = user_email
     return redirect('chat')
 
+def ensure_refreshable_credentials(credentials):
+    required = ['refresh_token', 'token_uri', 'client_id', 'client_secret']
+    missing = [k for k in required if not credentials.get(k)]
+    if missing:
+        raise Exception(f"Missing fields for token refresh: {missing}. Please re-authenticate.")
+
 def read_gmail(request):
     credentials = request.session.get('google_credentials')
-    creds = Credentials(
-        token=credentials['token'],
-        refresh_token=credentials['refresh_token'],
-        token_uri=credentials['token_uri'],
-        client_id=credentials['client_id'],
-        scopes=credentials['scopes']
-    )
-    
-    service = build('gmail', 'v1', credentials=creds)
-    results = service.users().messages().list(userId='me').execute()
-    message_ids = results.get('messages', [])
-    full_messages = []
-    for msg in message_ids:
-        full_messages.append(get_full_message(service, 'me', msg['id']))
-    return JsonResponse({'messages': full_messages})
+    try:
+        ensure_refreshable_credentials(credentials)
+        creds = Credentials(
+            token=credentials['token'],
+            refresh_token=credentials['refresh_token'],
+            token_uri=credentials['token_uri'],
+            client_id=credentials['client_id'],
+            client_secret=credentials['client_secret'],
+            scopes=credentials['scopes']
+        )
+        service = build('gmail', 'v1', credentials=creds)
+        results = service.users().messages().list(userId='me').execute()
+        message_ids = results.get('messages', [])
+        full_messages = []
+        docs = []
+        user_id = request.user.id
+        for msg in message_ids:
+            email = get_full_message(service, 'me', msg['id'])
+            # Convert HTML to text if needed
+            body = email.get('body', '')
+            if '<' in body and '>' in body:
+                body_text = html2text.html2text(body)
+            else:
+                body_text = body
+            full_messages.append(email)
+            docs.append({
+                'text': body_text,
+                'external_id': email['id'],
+                'subject': email.get('subject'),
+                'from': email.get('from'),
+                'to': email.get('to'),
+                'date': email.get('date'),
+                'type': 'email',
+            })
+        if user_id:
+            add_documents_to_vectorstore(user_id, docs, source='gmail')
+        return JsonResponse({'messages': full_messages})
+    except (RefreshError, Exception) as e:
+        print(f"Google token refresh failed or credentials missing: {e}")
+        request.session.pop('google_credentials', None)
+        return redirect('google-auth')
 
 def create_calendar_event(request):
     credentials = request.session.get('google_credentials')
@@ -315,6 +351,27 @@ def hubspot_contacts(request):
         )
     
     contacts = contacts_response.json().get('results', [])
+    # Store contacts in vectorstore
+    contact_docs = []
+    user_id = request.user.id
+    for contact in contacts:
+        props = contact.get('properties', {})
+        name = f"{props.get('firstname', '')} {props.get('lastname', '')}".strip()
+        email = props.get('email', '')
+        phone = props.get('phone', '')
+        company = props.get('company', '')
+        summary = f"{name} <{email}> | Phone: {phone} | Company: {company}"
+        contact_docs.append({
+            'text': summary,
+            'external_id': contact['id'],
+            'name': name,
+            'email': email,
+            'phone': phone,
+            'company': company,
+            'type': 'contact',
+        })
+    if user_id and contact_docs:
+        add_documents_to_vectorstore(user_id, contact_docs, source='hubspot_contact')
     
     # Fetch contact notes with actual content
     contact_notes = {}
@@ -368,6 +425,27 @@ def hubspot_contacts(request):
     for contact_id, note_ids in contact_notes.items():
         contact_notes_data[contact_id] = [notes_content.get(str(note_id), {}) for note_id in note_ids]
     print(f"NOTES DATA: {contact_notes_data}")
+    docs = []
+    user_id = request.user.id
+    for contact_id, note_ids in contact_notes.items():
+        for note_id in note_ids:
+            note = notes_content.get(str(note_id), {})
+            content = note.get('content', '')
+            # Convert HTML to text if needed
+            if '<' in content and '>' in content:
+                text = html2text.html2text(content)
+            else:
+                text = content
+            docs.append({
+                'text': text,
+                'external_id': note_id,
+                'contact_id': contact_id,
+                'created_at': note.get('created_at'),
+                'owner_id': note.get('owner_id'),
+                'type': 'contact_note',
+            })
+    if user_id and docs:
+        add_documents_to_vectorstore(user_id, docs, source='hubspot_note')
     return render(request, 'contacts.html', {
         'contacts': contacts,
         'contact_notes': contact_notes_data
@@ -450,70 +528,41 @@ def create_note(request, contact_id):
         form = NoteForm(request.POST)
         if form.is_valid():
             # Prepare note data for HubSpot
-            timestamp = str(int(time.time() * 1000))  # Current time in milliseconds
-            # First create the note
-            note_response = requests.post(
+            # timestamp = str(int(time.time() * 1000))  # Current time in milliseconds
+
+            note_data = {
+                "properties": {
+                    "hs_note_body": form.cleaned_data['content'],
+                    "hs_timestamp": "2025-07-13T08:29:53.885Z",  # Required timestamp
+                    # "hs_note_title": form.cleaned_data.get('hs_note_title', 'Note from Django App'),  # Optional but recommended
+                    # "hs_note_status": form.cleaned_data.get('hs_note_status', 'PUBLISHED'),  # Default to published
+                    # "hubspot_owner_id": "default"  # Often required
+                },
+                "associations": [
+                    {
+                        "to": {"id": contact_id},
+                        "types": [{
+                            "associationCategory": "HUBSPOT_DEFINED",
+                            "associationTypeId": 201  # Note to contact association type
+                        }]
+                    }
+                ]
+            }
+            
+            # Create note in HubSpot
+            response = requests.post(
                 'https://api.hubapi.com/crm/v3/objects/notes',
                 headers=headers,
-                json={
-                    "properties": {
-                        "hs_note_body": form.cleaned_data['content'],
-                        "hs_timestamp": timestamp,
-                        # "hubspot_owner_id": "default"
-                    }
-                }
+                json=note_data
             )
-
-            if note_response.status_code == 201:
-                note_id = note_response.json()['id']
-                
-                # Then create the association
-                association_response = requests.put(
-                    f'https://api.hubapi.com/crm/v3/objects/notes/{note_id}/associations/contact/{contact_id}/201',
-                    headers=headers,
-                    json={}
-                )
-                
-                if association_response.status_code == 200:
-                    messages.success(request, 'Note created and associated successfully!')
-                else:
-                    print(association_response.json())
-                    messages.error(request, f"Association failed: {association_response.json().get('message', '')}")
+            
+            if response.status_code == 201:
+                messages.success(request, 'Note added successfully!')
+                return redirect('hubspot_contacts')
             else:
-                messages.error(request, f"Note creation failed: {note_response.json().get('message', '')}")
-            # note_data = {
-            #     "properties": {
-            #         "hs_note_body": form.cleaned_data['content'],
-            #         "hs_timestamp": timestamp,  # Required timestamp
-            #         # "hs_note_title": form.cleaned_data.get('hs_note_title', 'Note from Django App'),  # Optional but recommended
-            #         # "hs_note_status": form.cleaned_data.get('hs_note_status', 'PUBLISHED'),  # Default to published
-            #         # "hubspot_owner_id": "default"  # Often required
-            #     },
-            #     "associations": [
-            #         {
-            #             "to": {"id": contact_id},
-            #             "types": [{
-            #                 "associationCategory": "HUBSPOT_DEFINED",
-            #                 "associationTypeId": 203  # Note to contact association type
-            #             }]
-            #         }
-            #     ]
-            # }
-            
-            # # Create note in HubSpot
-            # response = requests.post(
-            #     'https://api.hubapi.com/crm/v3/objects/notes',
-            #     headers=headers,
-            #     json=note_data
-            # )
-            
-            # if response.status_code == 201:
-            #     messages.success(request, 'Note added successfully!')
-            #     return redirect('hubspot_contacts')
-            # else:
-            #     print(response.json())
-            #     error_msg = f"Failed to add note: {response.json().get('message', 'Unknown error')}"
-            #     messages.error(request, error_msg)
+                print(response.json())
+                error_msg = f"Failed to add note: {response.json().get('message', 'Unknown error')}"
+                messages.error(request, error_msg)
     else:
         form = NoteForm()
     

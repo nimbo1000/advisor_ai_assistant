@@ -20,8 +20,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def receive(self, text_data):
         data = json.loads(text_data)
         message = data['message']
-        # Use a dummy user_id for now
-        user_id = 1
+        # Use authenticated user's pk or username if available
+        user = self.scope.get('user')
+        if user and hasattr(user, 'is_authenticated') and user.is_authenticated:
+            user_id = user.pk or user.username
+            print(f"pk: {user.pk}")
+            print(f"username: {user.username}")
+        else:
+            # Fallback to email from session if available
+            creds = self.scope['session'].get('google_credentials', {})
+            user_id = creds.get('user_email', 'anonymous')
         creds_data = self.scope['session'].get('google_credentials')
         response = agent_respond(user_id, message, creds_data=creds_data)
         await self.channel_layer.group_send(

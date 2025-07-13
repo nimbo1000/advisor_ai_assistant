@@ -36,3 +36,13 @@ class HubspotIntegration(models.Model):
     expires_in = models.IntegerField()
     token_created = models.DateTimeField(auto_now_add=True)
 
+
+class OngoingInstruction(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ongoing_instructions')
+    instruction = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user}: {self.instruction[:50]}..."
+
