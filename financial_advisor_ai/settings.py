@@ -162,3 +162,5 @@ CHANNEL_LAYERS = {
 CRONJOBS = [
     ('* * * * *', 'django.core.management.call_command', ['poll_gmail']),
 ]
+
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")

@@ -1,11 +1,10 @@
 # Tool stubs for agent actions
 
-from .vectorstore_pg import vectorstore
+from .vectorstore import vectorstore, query_user_documents
 from .utils import create_google_calendar_event
 from django.conf import settings
 from google.oauth2.credentials import Credentials
 from .utils import send_gmail_message
-from .vectorstore import query_user_documents
 
 def add_ongoing_instruction(user_id, instruction):
     # TODO: Save instruction to DB or local store
@@ -38,7 +37,7 @@ def get_recent_emails(user_id):
 
 def get_upcoming_events(user_id):
     print(f"[TOOL] Get upcoming events for user {user_id}")
-    result = query_user_documents(1, "upcoming events", top_k=5, type="calendar_event")
+    result = query_user_documents(user_id, "upcoming events", top_k=5, type="calendar_event")
     docs = result.get('documents', [])
     metadatas = result.get('metadatas', [])
     events = []

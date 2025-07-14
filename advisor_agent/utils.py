@@ -14,7 +14,6 @@ import datetime
 import requests
 import html2text
 from django.conf import settings
-from .models import HubspotIntegration
 
 
 def create_google_calendar_event(creds, summary, start, end, attendees=None, description=None, location=None, timezone='UTC'):
@@ -196,6 +195,7 @@ def fetch_hubspot_contacts_and_notes(user):
     Returns (contacts, contact_notes_data)
     """
     try:
+        from .models import HubspotIntegration
         integration = HubspotIntegration.objects.get(user=user)
     except HubspotIntegration.DoesNotExist:
         return [], {}

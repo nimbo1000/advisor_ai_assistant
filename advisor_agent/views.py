@@ -23,6 +23,14 @@ from .vectorstore import add_documents_to_vectorstore
 from google.auth.exceptions import RefreshError
 from .models import GmailPollingState
 from .utils import fetch_gmail_messages, fetch_calendar_events, fetch_hubspot_contacts_and_notes
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse
+import json
+from .models import GmailPollingState
+from .utils import fetch_calendar_events
+from .vectorstore import add_documents_to_vectorstore
+from .agent import agent_respond
+
 # Create your views here.
 
 def chat_view(request):
@@ -126,6 +134,9 @@ def google_auth_callback(request):
         polling_state.save()
         # Fetch and store calendar events after login
         fetch_calendar_events(creds_data, user.id)
+        # Register Google Calendar webhook for this user
+        webhook_url = settings.BASE_URL + '/webhooks/google-calendar/'
+        register_calendar_webhook(flow.credentials, webhook_url, user.id)
     # Store credentials and user info in session
     request.session['google_credentials'] = {
         'token': flow.credentials.token,
@@ -434,3 +445,51 @@ def get_valid_token(hubspot_integration):
         if token_age.total_seconds() > hubspot_integration.expires_in - 300:  # Refresh 5 min before expiration
             return refresh_tokens(hubspot_integration.user)
         return hubspot_integration.access_token
+
+@csrf_exempt
+def google_calendar_webhook(request):
+    if request.method == 'POST':
+        channel_id = request.headers.get('X-Goog-Channel-ID')
+        resource_state = request.headers.get('X-Goog-Resource-State')
+        resource_id = request.headers.get('X-Goog-Resource-ID')
+        user_token = request.headers.get('X-Goog-Channel-Token')
+        # TODO: Map user_token or channel_id to user and credentials
+        # For demo, assume user_token is user_id
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        try:
+            user = User.objects.get(id=user_token)
+        except Exception:
+            return HttpResponse('User not found', status=404)
+        polling_state = getattr(user, 'gmail_polling_state', None)
+        if not polling_state:
+            return HttpResponse('No credentials', status=404)
+        creds_data = polling_state.get_google_credentials()
+        # Fetch the latest event (could be improved to fetch only changed event)
+        events = fetch_calendar_events(creds_data, user.id, max_results=1)
+        # Gather ongoing instructions (stub)
+        from .models import OngoingInstruction
+        instructions = list(OngoingInstruction.objects.filter(user=user).values()) if hasattr(OngoingInstruction, 'objects') else []
+        # Call agent with new event and instructions
+        if events:
+            event = events[0]
+            agent_input = {
+                'new_event': event,
+                'ongoing_instructions': instructions,
+            }
+            agent_respond(user.id, json.dumps(agent_input), creds_data=creds_data)
+        return HttpResponse('OK')
+    else:
+        return HttpResponse('Webhook endpoint for Google Calendar')
+
+# Register webhook after Google OAuth login
+def register_calendar_webhook(creds, webhook_url, user_token):
+    from googleapiclient.discovery import build
+    service = build('calendar', 'v3', credentials=creds)
+    body = {
+        "id": f"calendar-channel-{user_token}",
+        "type": "web_hook",
+        "address": webhook_url,
+        "token": str(user_token),
+    }
+    service.events().watch(calendarId='primary', body=body).execute()

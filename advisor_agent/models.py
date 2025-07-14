@@ -38,13 +38,10 @@ class HubspotIntegration(models.Model):
 
 
 class OngoingInstruction(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='ongoing_instructions')
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     instruction = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self):
-        return f"{self.user}: {self.instruction[:50]}..."
+    status = models.CharField(max_length=32, default='active')
 
 
 class GmailPollingState(models.Model):

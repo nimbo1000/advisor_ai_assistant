@@ -15,4 +15,5 @@ urlpatterns = [
     path('hubspot/contacts/', hubspot_contacts, name='hubspot_contacts'),
     path('hubspot/contacts/create/', create_contact, name='create_contact'),
     path('hubspot/contacts/<int:contact_id>/notes/create/', create_note, name='create_note'),
+    path('webhooks/google-calendar/', google_calendar_webhook, name='google_calendar_webhook'),
 ] 
