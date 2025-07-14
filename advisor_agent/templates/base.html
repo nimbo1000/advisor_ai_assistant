@@ -242,6 +242,17 @@
                 </ul>
                 <ul class="navbar-nav ms-auto">
                     {% if request.user.is_authenticated %}
+                        <li class="nav-item">
+                            {% if not hubspot_connected %}
+                                <a class="nav-link" href="{% url 'hubspot_auth' %}">
+                                    <i class="fab fa-hubspot me-1"></i> Connect HubSpot
+                                </a>
+                            {% else %}
+                                <span class="nav-link disabled">
+                                    <i class="fab fa-hubspot me-1"></i> HubSpot Connected
+                                </span>
+                            {% endif %}
+                        </li>
                         <li class="nav-item dropdown">
                             <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
                                 <div class="contact-avatar me-2">
@@ -270,13 +281,8 @@
                         </li>
                     {% else %}
                         <li class="nav-item">
-                            <a class="nav-link" href="{% url 'login' %}">
-                                <i class="fas fa-sign-in-alt me-1"></i> Login
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="{% url 'register' %}">
-                                <i class="fas fa-user-plus me-1"></i> Register
+                            <a class="nav-link" href="{% url 'google-auth' %}">
+                                <i class="fas fa-sign-in-alt me-1"></i> Login with Google
                             </a>
                         </li>
                     {% endif %}

@@ -39,14 +39,20 @@ def chat_view(request):
     is_logged_in = 'google_credentials' in request.session
     user_name = None
     user_email = None
+    hubspot_connected = False
     if is_logged_in:
         creds = request.session.get('google_credentials', {})
         user_name = creds.get('user_name')
         user_email = creds.get('user_email')
+        # Check if HubSpot is connected for this user
+        if request.user.is_authenticated:
+            from .models import HubspotIntegration
+            hubspot_connected = HubspotIntegration.objects.filter(user=request.user).exists()
     return render(request, 'advisor_agent/chat.html', {
         'is_logged_in': is_logged_in,
         'user_name': user_name,
         'user_email': user_email,
+        'hubspot_connected': hubspot_connected,
     })
 
 

@@ -163,4 +163,7 @@ CRONJOBS = [
     ('* * * * *', 'django.core.management.call_command', ['poll_gmail']),
 ]
 
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+BASE_URL = os.getenv("BASE_URL", "https://localhost:8000")
+
+from django.urls import reverse_lazy
+LOGIN_URL = "/auth/google/"
