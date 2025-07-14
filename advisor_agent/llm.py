@@ -21,13 +21,13 @@ class DummyLLM(BaseLanguageModel):
         return [AIMessage(content="[LLM] This is a dummy response.")]
 
 def get_llm():
-    # if OPENAI_API_KEY:
-    #     return ChatOpenAI(
-    #         openai_api_key=OPENAI_API_KEY,
-    #         model_name="gpt-4o-mini",
-    #         temperature=0.2,
-    #     )
-    if DEEPSEEK_API_KEY:
+    if OPENAI_API_KEY:
+        return ChatOpenAI(
+            openai_api_key=OPENAI_API_KEY,
+            model_name="gpt-4o-mini",
+            temperature=0.2,
+        )
+    elif DEEPSEEK_API_KEY:
         return ChatOpenAI(
             openai_api_key=DEEPSEEK_API_KEY,
             openai_api_base="https://api.deepseek.com/v1",
