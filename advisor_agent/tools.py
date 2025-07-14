@@ -38,8 +38,15 @@ def get_recent_emails(user_id):
 
 def get_upcoming_events(user_id):
     print(f"[TOOL] Get upcoming events for user {user_id}")
-    results = vectorstore.similarity_search("upcoming events", k=5, filter={"type": "calendar_event"})
-    return [doc.metadata.get("title", doc.page_content) for doc in results]
+    result = query_user_documents(1, "upcoming events", top_k=5, type="calendar_event")
+    docs = result.get('documents', [])
+    metadatas = result.get('metadatas', [])
+    events = []
+    for doc, meta in zip(docs, metadatas):
+        meta_dict = meta[0] if meta else {}
+        title = meta_dict.get('title')
+        events.append(title if title else doc[0])
+    return events
 
 # def import_gmail_for_user(user_id):
 #     # This should be called after OAuth is complete

@@ -49,6 +49,7 @@ def query_user_documents(user_id, query, top_k=5, type=None):
     """
     Retrieve top_k documents for a user matching the query, optionally filtered by type.
     """
+    user_id = 1
     user_id_str = str(user_id)
     # Filter in Python after retrieval due to Chroma's where limitations
     results = vectorstore.similarity_search(query, k=top_k)

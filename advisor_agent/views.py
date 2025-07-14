@@ -22,7 +22,7 @@ import html2text
 from .vectorstore import add_documents_to_vectorstore
 from google.auth.exceptions import RefreshError
 from .models import GmailPollingState
-from .utils import fetch_gmail_messages
+from .utils import fetch_gmail_messages, fetch_calendar_events, fetch_hubspot_contacts_and_notes
 # Create your views here.
 
 def chat_view(request):
@@ -103,7 +103,6 @@ def google_auth_callback(request):
         login(request, user)
         # Gmail polling on sign-in
         from .models import GmailPollingState
-        from .utils import fetch_gmail_messages
         polling_state, _ = GmailPollingState.objects.get_or_create(user=user)
         creds_data = {
             'token': flow.credentials.token,
@@ -125,6 +124,8 @@ def google_auth_callback(request):
         _, last_history_id = fetch_gmail_messages(creds_data, user.id, since_history_id=since_history_id)
         polling_state.last_history_id = last_history_id
         polling_state.save()
+        # Fetch and store calendar events after login
+        fetch_calendar_events(creds_data, user.id)
     # Store credentials and user info in session
     request.session['google_credentials'] = {
         'token': flow.credentials.token,
@@ -182,38 +183,12 @@ def create_calendar_event(request):
     return JsonResponse(event)
 
 def read_calendar(request):
-    # Check for credentials in session
     creds_data = request.session.get('google_credentials')
     if not creds_data:
         return JsonResponse({'error': 'Not authenticated with Google'}, status=401)
-    creds = Credentials(
-        token=creds_data['token'],
-        refresh_token=creds_data.get('refresh_token'),
-        token_uri=creds_data['token_uri'],
-        client_id=creds_data['client_id'],
-        # client_secret=settings.GOOGLE_CLIENT_SECRET,
-        scopes=creds_data['scopes'],
-    )
-    service = build('calendar', 'v3', credentials=creds)
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    events_result = service.events().list(
-        calendarId='primary', timeMin=now,
-        maxResults=20, singleEvents=True,
-        orderBy='startTime').execute()
-    events = events_result.get('items', [])
-    event_list = []
-    for event in events:
-        event_list.append({
-            'id': event.get('id'),
-            'summary': event.get('summary'),
-            'description': event.get('description'),
-            'start': event.get('start', {}).get('dateTime') or event.get('start', {}).get('date'),
-            'end': event.get('end', {}).get('dateTime') or event.get('end', {}).get('date'),
-            'attendees': [a.get('email') for a in event.get('attendees', [])] if 'attendees' in event else [],
-            'organizer': event.get('organizer', {}).get('email'),
-            'location': event.get('location'),
-        })
-    return JsonResponse({'events': event_list})
+    user_id = request.user.id
+    events = fetch_calendar_events(creds_data, user_id)
+    return JsonResponse({'events': events})
 
 def logout_view(request):
     request.session.flush()
@@ -286,6 +261,8 @@ def hubspot_callback(request):
             'expires_in': token_data['expires_in'],
         }
     )
+    # Automatically fetch and store contacts/notes after authentication
+    fetch_hubspot_contacts_and_notes(request.user)
     return redirect('hubspot_contacts')
 
 def refresh_tokens(user):
@@ -318,133 +295,7 @@ def refresh_tokens(user):
 
 # @login_required
 def hubspot_contacts(request):
-    try:
-        integration = HubspotIntegration.objects.get(user=request.user)
-    except HubspotIntegration.DoesNotExist:
-        return redirect('hubspot_auth')
-    
-    # Check token expiration
-    token_age = datetime.now() - integration.token_created.replace(tzinfo=None)
-    if token_age > timedelta(seconds=integration.expires_in - 300):
-        access_token = refresh_tokens(request.user)
-        if not access_token:
-            return redirect('hubspot_auth')
-    else:
-        access_token = integration.access_token
-    
-    # Fetch contacts
-    headers = {'Authorization': f'Bearer {access_token}'}
-    contacts_response = requests.get(
-        'https://api.hubapi.com/crm/v3/objects/contacts',
-        headers=headers,
-        params={'limit': 100}
-    )
-    
-    if contacts_response.status_code == 401:
-        access_token = refresh_tokens(request.user)
-        headers['Authorization'] = f'Bearer {access_token}'
-        contacts_response = requests.get(
-            'https://api.hubapi.com/crm/v3/objects/contacts',
-            headers=headers,
-            params={'limit': 100}
-        )
-    
-    contacts = contacts_response.json().get('results', [])
-    # Store contacts in vectorstore
-    contact_docs = []
-    user_id = request.user.id
-    for contact in contacts:
-        props = contact.get('properties', {})
-        name = f"{props.get('firstname', '')} {props.get('lastname', '')}".strip()
-        email = props.get('email', '')
-        phone = props.get('phone', '')
-        company = props.get('company', '')
-        summary = f"{name} <{email}> | Phone: {phone} | Company: {company}"
-        contact_docs.append({
-            'text': summary,
-            'external_id': contact['id'],
-            'name': name,
-            'email': email,
-            'phone': phone,
-            'company': company,
-            'type': 'contact',
-        })
-    if user_id and contact_docs:
-        add_documents_to_vectorstore(user_id, contact_docs, source='hubspot_contact')
-    
-    # Fetch contact notes with actual content
-    contact_notes = {}
-    all_note_ids = set()
-    
-    # First pass: Get all note IDs associated with contacts
-    for contact in contacts:
-        contact_id = contact["id"]
-        notes_response = requests.get(
-            f'https://api.hubapi.com/crm/v4/objects/contacts/{contact_id}/associations/notes',
-            headers=headers,
-            params={'limit': 100}
-        )
-        if notes_response.status_code == 200:
-            associations = notes_response.json().get('results', [])
-            print(associations)
-            note_ids = [assoc['toObjectId'] for assoc in associations]
-            contact_notes[contact_id] = note_ids
-            all_note_ids.update(note_ids)
-    
-    # Batch fetch note content in bulk (more efficient)
-    notes_content = {}
-    if all_note_ids:
-        # Convert to list and chunk into batches of 100
-        note_ids_list = list(all_note_ids)
-        for i in range(0, len(note_ids_list), 100):
-            batch_ids = note_ids_list[i:i+100]
-            
-            # Batch read endpoint for notes
-            batch_url = "https://api.hubapi.com/crm/v3/objects/notes/batch/read"
-            payload = {
-                "inputs": [{"id": note_id} for note_id in batch_ids],
-                "properties": ["hs_note_body", "hs_timestamp", "hubspot_owner_id"]
-            }
-            batch_response = requests.post(batch_url, headers=headers, json=payload)
-            
-            if batch_response.status_code == 200:
-                print(batch_response.json())
-                for note in batch_response.json().get('results', []):
-                    notes_content[note['id']] = {
-                        'content': note['properties'].get('hs_note_body', ''),
-                        'created_at': note['properties'].get('hs_timestamp', ''),
-                        'owner_id': note['properties'].get('hubspot_owner_id', '')
-                    }
-    
-    # {'status': 'COMPLETE', 'results': [{'id': '155251621624', 'properties': {'hs_createdate': '2025-07-12T18:17:00.301Z', 'hs_lastmodifieddate': '2025-07-12T18:17:00.301Z', 'hs_note_body': '<div style="" dir="auto" data-top-level="true"><p style="margin:0;">Sample note for sample contact. He want to sell Tesla stock because of Elon\'s political views.</p></div>', 'hs_object_id': '155251621624', 'hs_timestamp': '2025-07-12T18:17:00.301Z', 'hubspot_owner_id': '159516863'}, 'createdAt': '2025-07-12T18:17:00.301Z', 'updatedAt': '2025-07-12T18:17:00.301Z', 'archived': False}], 'startedAt': '2025-07-12T19:55:25.228Z', 'completedAt': '2025-07-12T19:55:25.235Z'}
-
-    # Now create a mapping of contact to actual note content
-    contact_notes_data = {}
-    print(f"NOTES CONTENT: {notes_content}")
-    for contact_id, note_ids in contact_notes.items():
-        contact_notes_data[contact_id] = [notes_content.get(str(note_id), {}) for note_id in note_ids]
-    print(f"NOTES DATA: {contact_notes_data}")
-    docs = []
-    user_id = request.user.id
-    for contact_id, note_ids in contact_notes.items():
-        for note_id in note_ids:
-            note = notes_content.get(str(note_id), {})
-            content = note.get('content', '')
-            # Convert HTML to text if needed
-            if '<' in content and '>' in content:
-                text = html2text.html2text(content)
-            else:
-                text = content
-            docs.append({
-                'text': text,
-                'external_id': note_id,
-                'contact_id': contact_id,
-                'created_at': note.get('created_at'),
-                'owner_id': note.get('owner_id'),
-                'type': 'contact_note',
-            })
-    if user_id and docs:
-        add_documents_to_vectorstore(user_id, docs, source='hubspot_note')
+    contacts, contact_notes_data = fetch_hubspot_contacts_and_notes(request.user)
     return render(request, 'contacts.html', {
         'contacts': contacts,
         'contact_notes': contact_notes_data

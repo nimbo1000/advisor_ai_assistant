@@ -10,6 +10,11 @@ from .vectorstore import add_documents_to_vectorstore
 # Management command for polling Gmail for all users
 import logging
 from django.contrib.auth import get_user_model
+import datetime
+import requests
+import html2text
+from django.conf import settings
+from .models import HubspotIntegration
 
 
 def create_google_calendar_event(creds, summary, start, end, attendees=None, description=None, location=None, timezone='UTC'):
@@ -133,6 +138,160 @@ def get_full_message(service, user_id, msg_id):
         'date': date,
         'body': body,
     }
+
+def fetch_calendar_events(creds_data, user_id, max_results=20):
+    """
+    Fetch upcoming Google Calendar events for a user and store them in the vectorstore.
+    Returns a list of event dicts.
+    """
+    creds = Credentials(
+        token=creds_data['token'],
+        refresh_token=creds_data.get('refresh_token'),
+        token_uri=creds_data['token_uri'],
+        client_id=creds_data['client_id'],
+        client_secret=creds_data['client_secret'],
+        scopes=creds_data['scopes'],
+    )
+    service = build('calendar', 'v3', credentials=creds)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    events_result = service.events().list(
+        calendarId='primary', timeMin=now,
+        maxResults=max_results, singleEvents=True,
+        orderBy='startTime').execute()
+    events = events_result.get('items', [])
+    event_list = []
+    docs = []
+    for event in events:
+        event_dict = {
+            'id': event.get('id'),
+            'summary': event.get('summary'),
+            'description': event.get('description'),
+            'start': event.get('start', {}).get('dateTime') or event.get('start', {}).get('date'),
+            'end': event.get('end', {}).get('dateTime') or event.get('end', {}).get('date'),
+            'attendees': [a.get('email') for a in event.get('attendees', [])] if 'attendees' in event else [],
+            'organizer': event.get('organizer', {}).get('email'),
+            'location': event.get('location'),
+        }
+        event_list.append(event_dict)
+        docs.append({
+            'text': event_dict['summary'] or '',
+            'external_id': event_dict['id'],
+            'title': event_dict['summary'],
+            'description': event_dict['description'],
+            'start': event_dict['start'],
+            'end': event_dict['end'],
+            'attendees': event_dict['attendees'],
+            'organizer': event_dict['organizer'],
+            'location': event_dict['location'],
+            'type': 'calendar_event',
+        })
+    print(f"FETCHED events for {user_id}, docs {docs}")
+    if user_id and docs:
+        add_documents_to_vectorstore(user_id, docs, source='calendar')
+    return event_list
+
+def fetch_hubspot_contacts_and_notes(user):
+    """
+    Fetch HubSpot contacts and notes for a user and store them in the vectorstore.
+    Returns (contacts, contact_notes_data)
+    """
+    try:
+        integration = HubspotIntegration.objects.get(user=user)
+    except HubspotIntegration.DoesNotExist:
+        return [], {}
+    # Check token expiration
+    from datetime import datetime, timedelta
+    token_age = datetime.now() - integration.token_created.replace(tzinfo=None)
+    if token_age > timedelta(seconds=integration.expires_in - 300):
+        from advisor_agent.views import refresh_tokens
+        access_token = refresh_tokens(user)
+        if not access_token:
+            return [], {}
+    else:
+        access_token = integration.access_token
+    headers = {'Authorization': f'Bearer {access_token}'}
+    contacts_response = requests.get(
+        'https://api.hubapi.com/crm/v3/objects/contacts',
+        headers=headers,
+        params={'limit': 100}
+    )
+    contacts = contacts_response.json().get('results', [])
+    contact_docs = []
+    user_id = user.id
+    for contact in contacts:
+        props = contact.get('properties', {})
+        name = f"{props.get('firstname', '')} {props.get('lastname', '')}".strip()
+        email = props.get('email', '')
+        phone = props.get('phone', '')
+        company = props.get('company', '')
+        summary = f"{name} <{email}> | Phone: {phone} | Company: {company}"
+        contact_docs.append({
+            'text': summary,
+            'external_id': contact['id'],
+            'name': name,
+            'email': email,
+            'phone': phone,
+            'company': company,
+            'type': 'contact',
+        })
+    if user_id and contact_docs:
+        add_documents_to_vectorstore(user_id, contact_docs, source='hubspot_contact')
+    # Fetch contact notes
+    contact_notes = {}
+    all_note_ids = set()
+    for contact in contacts:
+        contact_id = contact["id"]
+        notes_response = requests.get(
+            f'https://api.hubapi.com/crm/v4/objects/contacts/{contact_id}/associations/notes',
+            headers=headers,
+            params={'limit': 100}
+        )
+        if notes_response.status_code == 200:
+            associations = notes_response.json().get('results', [])
+            note_ids = [assoc['toObjectId'] for assoc in associations]
+            contact_notes[contact_id] = note_ids
+            all_note_ids.update(note_ids)
+    notes_content = {}
+    if all_note_ids:
+        note_ids_list = list(all_note_ids)
+        for i in range(0, len(note_ids_list), 100):
+            batch_ids = note_ids_list[i:i+100]
+            batch_url = "https://api.hubapi.com/crm/v3/objects/notes/batch/read"
+            payload = {
+                "inputs": [{"id": note_id} for note_id in batch_ids],
+                "properties": ["hs_note_body", "hs_timestamp", "hubspot_owner_id"]
+            }
+            batch_response = requests.post(batch_url, headers=headers, json=payload)
+            if batch_response.status_code == 200:
+                for note in batch_response.json().get('results', []):
+                    notes_content[note['id']] = {
+                        'content': note['properties'].get('hs_note_body', ''),
+                        'created_at': note['properties'].get('hs_timestamp', ''),
+                        'owner_id': note['properties'].get('hubspot_owner_id', '')
+                    }
+    contact_notes_data = {}
+    for contact_id, note_ids in contact_notes.items():
+        contact_notes_data[contact_id] = [notes_content.get(str(note_id), {}) for note_id in note_ids]
+    docs = []
+    for contact_id, note_ids in contact_notes.items():
+        for note_id in note_ids:
+            note = notes_content.get(str(note_id), {})
+            content = note.get('content', '')
+            if '<' in content and '>' in content:
+                text = html2text.html2text(content)
+            else:
+                text = content
+            docs.append({
+                'text': text,
+                'external_id': note_id,
+                'contact_id': contact_id,
+                'created_at': note.get('created_at'),
+                'owner_id': note.get('owner_id'),
+                'type': 'contact_note',
+            })
+    if user_id and docs:
+        add_documents_to_vectorstore(user_id, docs, source='hubspot_note')
+    return contacts, contact_notes_data
 
 # Management command for polling Gmail for all users
 def poll_gmail_for_all_users():
