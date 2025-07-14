@@ -97,7 +97,7 @@ def google_auth_callback(request):
     user_email = None
     id_token_decoded = None
     if id_token:
-        id_token_decoded = jwt.decode(id_token, options={"verify_signature": False})
+        id_token_decoded = jwt.decode(id_token, options={"verify_signature": False}, algorithms=["RS256"])
         print(id_token_decoded)
         user_email = id_token_decoded.get('email')
         user_name = id_token_decoded.get('name') or id_token_decoded.get('given_name')
@@ -235,7 +235,7 @@ def get_full_message(service, user_id, msg_id):
 HUBSPOT_AUTH_URL = "https://app.hubspot.com/oauth/authorize"
 HUBSPOT_TOKEN_URL = "https://api.hubapi.com/oauth/v1/token"
 
-# @login_required
+@login_required
 def hubspot_auth(request):
     params = {
         'client_id': settings.HUBSPOT_CLIENT_ID,
@@ -304,7 +304,7 @@ def refresh_tokens(user):
         # logger.error(f"Token refresh failed: {str(e)}")
         return None
 
-# @login_required
+@login_required
 def hubspot_contacts(request):
     contacts, contact_notes_data = fetch_hubspot_contacts_and_notes(request.user)
     return render(request, 'contacts.html', {
