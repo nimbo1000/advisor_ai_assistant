@@ -30,6 +30,7 @@ from .models import GmailPollingState
 from .utils import fetch_calendar_events
 from .vectorstore import add_documents_to_vectorstore
 from .agent import agent_respond
+from .tools import get_ongoing_instructions
 
 # Create your views here.
 
@@ -149,6 +150,7 @@ def google_auth_callback(request):
         'id_token_decoded': id_token_decoded,
         'user_name': user_name,
         'user_email': user_email,
+        'user_id': user.id,  # Ensure Django user id is available in session
     }
     request.session['user_name'] = user_name
     request.session['user_email'] = user_email
@@ -477,9 +479,8 @@ def google_calendar_webhook(request):
         creds_data = polling_state.get_google_credentials()
         # Fetch the latest event (could be improved to fetch only changed event)
         events = fetch_calendar_events(creds_data, user.id, max_results=1)
-        # Gather ongoing instructions (stub)
-        from .models import OngoingInstruction
-        instructions = list(OngoingInstruction.objects.filter(user=user).values()) if hasattr(OngoingInstruction, 'objects') else []
+        # Retrieve ongoing instructions from vectorstore
+        instructions = get_ongoing_instructions({'user_id': user.id})
         # Call agent with new event and instructions
         if events:
             event = events[0]
@@ -576,10 +577,8 @@ def hubspot_webhook(request):
                     new_event = doc
             else:
                 continue
-            # Gather ongoing instructions
-            from .models import OngoingInstruction
-            instructions = list(OngoingInstruction.objects.filter(user=user).values()) if hasattr(OngoingInstruction, 'objects') else []
-            # Call agent with new event and instructions
+            # Retrieve ongoing instructions from vectorstore
+            instructions = get_ongoing_instructions({'user_id': user.id})
             from .agent import agent_respond
             agent_input = {
                 'new_event': new_event,

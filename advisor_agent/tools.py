@@ -1,20 +1,45 @@
 # Tool stubs for agent actions
 
-from .vectorstore import vectorstore, query_user_documents
+from .vectorstore import vectorstore, query_user_documents, add_documents_to_vectorstore
 from .utils import create_google_calendar_event
 from django.conf import settings
 from google.oauth2.credentials import Credentials
 from .utils import send_gmail_message
+import json
 
-def add_ongoing_instruction(user_id, instruction):
-    # TODO: Save instruction to DB or local store
+def add_ongoing_instruction(args):
+    """
+    Args should be a dict or JSON string with at least 'user_id' and 'instruction'.
+    """
+    if isinstance(args, str):
+        args = json.loads(args)
+    user_id = args.get('user_id')
+    instruction = args.get('instruction')
+    if not user_id or not instruction:
+        raise ValueError('user_id and instruction are required')
+    doc = {
+        'text': instruction,
+        'external_id': f'instruction:{hash(instruction)}',
+        'type': 'ongoing_instruction',
+    }
+    add_documents_to_vectorstore(user_id, [doc], source='ongoing_instruction')
     print(f"[TOOL] Add instruction for user {user_id}: {instruction}")
     return True
 
-def get_ongoing_instructions(user_id):
-    # TODO: Retrieve instructions from DB or local store
-    print(f"[TOOL] Get instructions for user {user_id}")
-    return ["When someone emails me that is not in Hubspot, create a contact."]
+def get_ongoing_instructions(args):
+    """
+    Args should be a dict or JSON string with at least 'user_id'.
+    """
+    if isinstance(args, str):
+        args = json.loads(args)
+    user_id = args.get('user_id')
+    if not user_id:
+        raise ValueError('user_id is required')
+    result = query_user_documents(user_id, "ongoing instructions", top_k=20, type="ongoing_instruction")
+    docs = result.get('documents', [])
+    instructions = [doc[0] for doc in docs]
+    print(f"[TOOL] Get instructions for user {user_id}: {instructions}")
+    return instructions
 
 def get_contacts(user_id):
     print(f"[TOOL] Get contacts for user {user_id}")
@@ -86,12 +111,12 @@ def ask_human(prompt: str) -> str:
 TOOLS = [
     {
         'name': 'add_ongoing_instruction',
-        'description': 'Add an ongoing instruction for the user.',
+        'description': 'Add an ongoing instruction for the user. Args: user_id, instruction',
         'function': add_ongoing_instruction,
     },
     {
         'name': 'get_ongoing_instructions',
-        'description': 'Get all ongoing instructions for the user.',
+        'description': 'Get all ongoing instructions for the user. Args: user_id',
         'function': get_ongoing_instructions,
     },
     {

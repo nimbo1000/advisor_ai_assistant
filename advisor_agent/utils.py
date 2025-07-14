@@ -308,5 +308,9 @@ def poll_gmail_for_all_users():
             _, last_history_id = fetch_gmail_messages(creds_data, user.id, since_history_id=since_history_id)
             polling_state.last_history_id = last_history_id
             polling_state.save()
+            # Retrieve ongoing instructions from vectorstore
+            from .tools import get_ongoing_instructions
+            instructions = get_ongoing_instructions({'user_id': user.id})
+            # You can now use instructions as needed, e.g., pass to agent
         except Exception as e:
             logging.exception(f"Failed to poll Gmail for user {user.id}: {e}") 

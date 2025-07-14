@@ -84,5 +84,9 @@ def agent_respond(user_id, message, creds_data=None):
             tool.func = lambda args: schedule_calendar_event_wrapper(args, creds_data=creds_data)
         if tool.name == 'send_email':
             tool.func = lambda args: send_email_wrapper(args, creds_data=creds_data)
-    response = agent_executor.run(message)
+    # Inject user_id into the message context for the agent
+    # This can be done by prepending a system message or instruction
+    user_context = f"[USER_ID: {user_id}] "
+    full_message = user_context + message
+    response = agent_executor.run(full_message)
     return response 
