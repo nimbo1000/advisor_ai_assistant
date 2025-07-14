@@ -48,10 +48,20 @@ def add_documents_to_vectorstore(user_id, docs, source):
 def query_user_documents(user_id, query, top_k=5, type=None):
     """
     Retrieve top_k documents for a user matching the query, optionally filtered by type.
+    Accepts user_id as int, str, dict with 'user_id', or JSON string.
     """
-    user_id = 1
+    # Handle user_id as JSON string or dict (e.g., '{"user_id": 1}' or {'user_id': 1})
+    import json
+    if isinstance(user_id, str):
+        try:
+            parsed = json.loads(user_id)
+            if isinstance(parsed, dict) and 'user_id' in parsed:
+                user_id = parsed['user_id']
+        except Exception:
+            pass
+    if isinstance(user_id, dict) and 'user_id' in user_id:
+        user_id = user_id['user_id']
     user_id_str = str(user_id)
-    # Filter in Python after retrieval due to Chroma's where limitations
     results = vectorstore.similarity_search(query, k=top_k)
     filtered = []
     for doc in results:
@@ -59,7 +69,6 @@ def query_user_documents(user_id, query, top_k=5, type=None):
         if meta.get('user_id') == user_id_str:
             if type is None or meta.get('type') == type:
                 filtered.append(doc)
-    # Return a dict similar to previous API
     return {
         'documents': [[doc.page_content] for doc in filtered],
         'metadatas': [[doc.metadata] for doc in filtered],
