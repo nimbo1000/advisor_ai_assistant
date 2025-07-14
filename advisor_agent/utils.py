@@ -293,6 +293,76 @@ def fetch_hubspot_contacts_and_notes(user):
         add_documents_to_vectorstore(user_id, docs, source='hubspot_note')
     return contacts, contact_notes_data
 
+def create_hubspot_contact(user, firstname, lastname, email, phone='', company='', website=''):
+    from .models import HubspotIntegration
+    try:
+        integration = HubspotIntegration.objects.get(user=user)
+        access_token = integration.access_token
+    except HubspotIntegration.DoesNotExist:
+        raise Exception('HubSpot integration not found for user')
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    contact_data = {
+        "properties": {
+            "firstname": firstname,
+            "lastname": lastname,
+            "email": email,
+            "phone": phone,
+            "company": company,
+            "website": website
+        }
+    }
+    response = requests.post(
+        'https://api.hubapi.com/crm/v3/objects/contacts',
+        headers=headers,
+        json=contact_data
+    )
+    if response.status_code == 201:
+        return response.json()
+    else:
+        raise Exception(f"Failed to create contact: {response.json().get('message', 'Unknown error')}")
+
+def create_hubspot_note(user, contact_id, content, timestamp=None):
+    from .models import HubspotIntegration
+    import datetime
+    try:
+        integration = HubspotIntegration.objects.get(user=user)
+        access_token = integration.access_token
+    except HubspotIntegration.DoesNotExist:
+        raise Exception('HubSpot integration not found for user')
+    headers = {
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+    if not timestamp:
+        timestamp = datetime.datetime.utcnow().isoformat() + 'Z'
+    note_data = {
+        "properties": {
+            "hs_note_body": content,
+            "hs_timestamp": timestamp,
+        },
+        "associations": [
+            {
+                "to": {"id": contact_id},
+                "types": [{
+                    "associationCategory": "HUBSPOT_DEFINED",
+                    "associationTypeId": 201
+                }]
+            }
+        ]
+    }
+    response = requests.post(
+        'https://api.hubapi.com/crm/v3/objects/notes',
+        headers=headers,
+        json=note_data
+    )
+    if response.status_code == 201:
+        return response.json()
+    else:
+        raise Exception(f"Failed to add note: {response.json().get('message', 'Unknown error')}")
+
 # Management command for polling Gmail for all users
 def poll_gmail_for_all_users():
     from .models import GmailPollingState

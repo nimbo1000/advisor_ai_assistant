@@ -31,6 +31,7 @@ from .utils import fetch_calendar_events
 from .vectorstore import add_documents_to_vectorstore
 from .agent import agent_respond
 from .tools import get_ongoing_instructions
+from .utils import create_hubspot_contact, create_hubspot_note
 
 # Create your views here.
 
@@ -328,122 +329,69 @@ def hubspot_contacts(request):
 # hubspot_integration/views.py
 @login_required
 def create_contact(request):
-    try:
-        integration = HubspotIntegration.objects.get(user=request.user)
-        access_token = get_valid_token(integration)
-    except HubspotIntegration.DoesNotExist:
-        return redirect('hubspot_auth')
-    
-    headers = {
-        'Authorization': f'Bearer {access_token}',
-        'Content-Type': 'application/json'
-    }
-    
     if request.method == 'POST':
         form = ContactForm(request.POST)
         if form.is_valid():
-            # Prepare contact data for HubSpot
-            contact_data = {
-                "properties": {
-                    "firstname": form.cleaned_data['firstname'],
-                    "lastname": form.cleaned_data['lastname'],
-                    "email": form.cleaned_data['email'],
-                    "phone": form.cleaned_data.get('phone', ''),
-                    "company": form.cleaned_data.get('company', ''),
-                    "website": form.cleaned_data.get('website', '')
-                }
-            }
-            
-            # Create contact in HubSpot
-            response = requests.post(
-                'https://api.hubapi.com/crm/v3/objects/contacts',
-                headers=headers,
-                json=contact_data
-            )
-            if response.status_code == 201:
+            try:
+                create_hubspot_contact(
+                    request.user,
+                    form.cleaned_data['firstname'],
+                    form.cleaned_data['lastname'],
+                    form.cleaned_data['email'],
+                    form.cleaned_data.get('phone', ''),
+                    form.cleaned_data.get('company', ''),
+                    form.cleaned_data.get('website', ''),
+                )
                 return redirect('hubspot_contacts')
-            else:
-                error_msg = f"Failed to create contact: {response.json().get('message', 'Unknown error')}"
+            except Exception as e:
+                error_msg = str(e)
                 return render(request, 'create_contact.html', {'form': form, 'error': error_msg})
     else:
         form = ContactForm()
-    
     return render(request, 'create_contact.html', {'form': form})
 
 # hubspot_integration/views.py
 @login_required
 def create_note(request, contact_id):
+    from .models import HubspotIntegration
     try:
         integration = HubspotIntegration.objects.get(user=request.user)
         access_token = get_valid_token(integration)
     except HubspotIntegration.DoesNotExist:
         return redirect('hubspot_auth')
-    
     headers = {
         'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/json'
     }
-    
-    # Get contact details for context
     contact_response = requests.get(
         f'https://api.hubapi.com/crm/v3/objects/contacts/{contact_id}',
         headers=headers,
         params={'properties': 'firstname,lastname,email'}
     )
-    
     if contact_response.status_code != 200:
         messages.error(request, 'Contact not found')
         return redirect('hubspot_contacts')
-    
     contact = contact_response.json()
-    
     if request.method == 'POST':
         form = NoteForm(request.POST)
         if form.is_valid():
-            # Prepare note data for HubSpot
-            # timestamp = str(int(time.time() * 1000))  # Current time in milliseconds
-
-            note_data = {
-                "properties": {
-                    "hs_note_body": form.cleaned_data['content'],
-                    "hs_timestamp": "2025-07-13T08:29:53.885Z",  # Required timestamp
-                    # "hs_note_title": form.cleaned_data.get('hs_note_title', 'Note from Django App'),  # Optional but recommended
-                    # "hs_note_status": form.cleaned_data.get('hs_note_status', 'PUBLISHED'),  # Default to published
-                    # "hubspot_owner_id": "default"  # Often required
-                },
-                "associations": [
-                    {
-                        "to": {"id": contact_id},
-                        "types": [{
-                            "associationCategory": "HUBSPOT_DEFINED",
-                            "associationTypeId": 201  # Note to contact association type
-                        }]
-                    }
-                ]
-            }
-            
-            # Create note in HubSpot
-            response = requests.post(
-                'https://api.hubapi.com/crm/v3/objects/notes',
-                headers=headers,
-                json=note_data
-            )
-            
-            if response.status_code == 201:
+            try:
+                create_hubspot_note(
+                    request.user,
+                    contact_id,
+                    form.cleaned_data['content'],
+                )
                 messages.success(request, 'Note added successfully!')
                 return redirect('hubspot_contacts')
-            else:
-                print(response.json())
-                error_msg = f"Failed to add note: {response.json().get('message', 'Unknown error')}"
+            except Exception as e:
+                error_msg = str(e)
                 messages.error(request, error_msg)
     else:
         form = NoteForm()
-    
     contact_name = (
         f"{contact['properties'].get('firstname', '')} "
         f"{contact['properties'].get('lastname', '')}"
     ).strip() or contact['properties'].get('email', 'Contact')
-    
     return render(request, 'create_note.html', {
         'form': form,
         'contact': contact,

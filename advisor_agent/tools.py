@@ -1,11 +1,12 @@
 # Tool stubs for agent actions
 
 from .vectorstore import vectorstore, query_user_documents, add_documents_to_vectorstore
-from .utils import create_google_calendar_event
+from .utils import create_google_calendar_event, create_hubspot_contact, create_hubspot_note
 from django.conf import settings
 from google.oauth2.credentials import Credentials
 from .utils import send_gmail_message
 import json
+from channels.db import database_sync_to_async
 
 def add_ongoing_instruction(args):
     """
@@ -169,4 +170,50 @@ TOOLS.append({
     'name': 'send_email',
     'description': 'Send an email via Gmail. Args: to, subject, body, cc, bcc, attachments',
     'function': send_email,
-}) 
+})
+
+@database_sync_to_async
+def create_contact_tool(args):
+    if isinstance(args, str):
+        args = json.loads(args)
+    user_id = args.get('user_id')
+    firstname = args.get('firstname')
+    lastname = args.get('lastname')
+    email = args.get('email')
+    phone = args.get('phone', '')
+    company = args.get('company', '')
+    website = args.get('website', '')
+    if not user_id or not firstname or not lastname or not email:
+        raise ValueError('user_id, firstname, lastname, and email are required')
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    user = User.objects.get(id=user_id)
+    return create_hubspot_contact(user, firstname, lastname, email, phone, company, website)
+
+@database_sync_to_async
+def create_contact_note_tool(args):
+    if isinstance(args, str):
+        args = json.loads(args)
+    user_id = args.get('user_id')
+    contact_id = args.get('contact_id')
+    content = args.get('content')
+    timestamp = args.get('timestamp')
+    if not user_id or not contact_id or not content:
+        raise ValueError('user_id, contact_id, and content are required')
+    from django.contrib.auth import get_user_model
+    User = get_user_model()
+    user = User.objects.get(id=user_id)
+    return create_hubspot_note(user, contact_id, content, timestamp)
+
+TOOLS.extend([
+    {
+        'name': 'create_contact',
+        'description': 'Create a new contact in HubSpot. Args: user_id, firstname, lastname, email, phone, company, website',
+        'function': create_contact_tool,
+    },
+    {
+        'name': 'create_contact_note',
+        'description': 'Create a new contact note in HubSpot. Args: user_id, contact_id, content, timestamp',
+        'function': create_contact_note_tool,
+    },
+]) 
