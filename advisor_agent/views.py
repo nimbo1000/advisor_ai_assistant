@@ -250,7 +250,6 @@ def hubspot_callback(request):
     code = request.GET.get('code')
     if not code:
         return render(request, 'error.html', {'error': 'Authorization failed'})
-    
     data = {
         'grant_type': 'authorization_code',
         'client_id': settings.HUBSPOT_CLIENT_ID,
@@ -258,18 +257,29 @@ def hubspot_callback(request):
         'redirect_uri': settings.HUBSPOT_REDIRECT_URI,
         'code': code
     }
-    
     response = requests.post(HUBSPOT_TOKEN_URL, data=data)
     if response.status_code != 200:
         return render(request, 'error.html', {'error': 'Token exchange failed'})
-    
     token_data = response.json()
+    # Fetch HubSpot user/portal ID
+    access_token = token_data['access_token']
+    user_id = None
+    portal_id = None
+    userinfo_resp = requests.get(
+        'https://api.hubapi.com/integrations/v1/me',
+        headers={'Authorization': f'Bearer {access_token}'}
+    )
+    if userinfo_resp.status_code == 200:
+        userinfo = userinfo_resp.json()
+        user_id = userinfo.get('user_id')
+        portal_id = userinfo.get('portalId')
     HubspotIntegration.objects.update_or_create(
         user=request.user,
         defaults={
             'access_token': token_data['access_token'],
             'refresh_token': token_data['refresh_token'],
             'expires_in': token_data['expires_in'],
+            'hubspot_user_id': str(user_id or portal_id) if (user_id or portal_id) else None,
         }
     )
     # Automatically fetch and store contacts/notes after authentication
@@ -493,3 +503,89 @@ def register_calendar_webhook(creds, webhook_url, user_token):
         "token": str(user_token),
     }
     service.events().watch(calendarId='primary', body=body).execute()
+
+@csrf_exempt
+def hubspot_webhook(request):
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except Exception:
+            return HttpResponse('Invalid JSON', status=400)
+        # HubSpot sends a list of events
+        for event in payload.get('events', []):
+            object_type = event.get('objectType')
+            object_id = event.get('objectId')
+            change_type = event.get('changeType')
+            hubspot_user_id = str(event.get('userId'))  # Use as string for matching
+            # Find the integration and user by hubspot_user_id
+            from .models import HubspotIntegration
+            try:
+                integration = HubspotIntegration.objects.get(hubspot_user_id=hubspot_user_id)
+                user = integration.user
+            except HubspotIntegration.DoesNotExist:
+                continue
+            access_token = integration.access_token
+            headers = {'Authorization': f'Bearer {access_token}'}
+            # Fetch the full object from HubSpot
+            if object_type == 'contact':
+                url = f'https://api.hubapi.com/crm/v3/objects/contacts/{object_id}'
+                resp = requests.get(url, headers=headers)
+                if resp.status_code == 200:
+                    contact = resp.json()
+                    props = contact.get('properties', {})
+                    name = f"{props.get('firstname', '')} {props.get('lastname', '')}".strip()
+                    email = props.get('email', '')
+                    phone = props.get('phone', '')
+                    company = props.get('company', '')
+                    summary = f"{name} <{email}> | Phone: {phone} | Company: {company}"
+                    doc = {
+                        'text': summary,
+                        'external_id': object_id,
+                        'name': name,
+                        'email': email,
+                        'phone': phone,
+                        'company': company,
+                        'type': 'contact',
+                    }
+                    from .vectorstore import add_documents_to_vectorstore
+                    add_documents_to_vectorstore(user.id, [doc], source='hubspot_contact')
+                    new_event = doc
+            elif object_type == 'note':
+                url = f'https://api.hubapi.com/crm/v3/objects/notes/{object_id}'
+                resp = requests.get(url, headers=headers, params={'properties': 'hs_note_body,hs_timestamp,hubspot_owner_id'})
+                if resp.status_code == 200:
+                    note = resp.json()
+                    props = note.get('properties', {})
+                    content = props.get('hs_note_body', '')
+                    created_at = props.get('hs_timestamp', '')
+                    owner_id = props.get('hubspot_owner_id', '')
+                    if '<' in content and '>' in content:
+                        import html2text
+                        text = html2text.html2text(content)
+                    else:
+                        text = content
+                    doc = {
+                        'text': text,
+                        'external_id': object_id,
+                        'created_at': created_at,
+                        'owner_id': owner_id,
+                        'type': 'contact_note',
+                    }
+                    from .vectorstore import add_documents_to_vectorstore
+                    add_documents_to_vectorstore(user.id, [doc], source='hubspot_note')
+                    new_event = doc
+            else:
+                continue
+            # Gather ongoing instructions
+            from .models import OngoingInstruction
+            instructions = list(OngoingInstruction.objects.filter(user=user).values()) if hasattr(OngoingInstruction, 'objects') else []
+            # Call agent with new event and instructions
+            from .agent import agent_respond
+            agent_input = {
+                'new_event': new_event,
+                'ongoing_instructions': instructions,
+            }
+            agent_respond(user.id, json.dumps(agent_input))
+        return HttpResponse('OK')
+    else:
+        return HttpResponse('Webhook endpoint for HubSpot')

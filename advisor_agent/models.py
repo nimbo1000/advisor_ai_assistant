@@ -35,6 +35,7 @@ class HubspotIntegration(models.Model):
     refresh_token = models.CharField(max_length=255)
     expires_in = models.IntegerField()
     token_created = models.DateTimeField(auto_now_add=True)
+    hubspot_user_id = models.CharField(max_length=64, blank=True, null=True)  # For mapping webhooks
 
 
 class OngoingInstruction(models.Model):
