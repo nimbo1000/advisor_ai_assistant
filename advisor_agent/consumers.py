@@ -33,8 +33,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if not user_id:
             # Fallback: do not proceed if user_id is not available
             await self.send(text_data=json.dumps({'error': 'User not authenticated'}))
-            return
-        response = agent_respond(user_id, message, creds_data=creds_data)
+            response = "User not authenticated"
+        else:
+            response = agent_respond(user_id, message, creds_data=creds_data)
         await self.channel_layer.group_send(
             self.room_group_name,
             {
