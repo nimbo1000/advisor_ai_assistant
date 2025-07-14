@@ -62,7 +62,13 @@ def query_user_documents(user_id, query, top_k=5, type=None):
     if isinstance(user_id, dict) and 'user_id' in user_id:
         user_id = user_id['user_id']
     user_id_str = str(user_id)
-    results = vectorstore.similarity_search(query, k=top_k)
+    # Build filter for similarity_search
+    filter_dict = None
+    if type is not None:
+        filter_dict = {"type": type}
+    results = vectorstore.similarity_search(query, k=top_k, filter=filter_dict) if filter_dict else vectorstore.similarity_search(query, k=top_k)
+    print(f"results: {results}")
+    print(f"user_id {user_id}")
     filtered = []
     for doc in results:
         meta = doc.metadata
