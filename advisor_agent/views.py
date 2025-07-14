@@ -21,6 +21,8 @@ from .forms import ContactForm, NoteForm
 import html2text
 from .vectorstore import add_documents_to_vectorstore
 from google.auth.exceptions import RefreshError
+from .models import GmailPollingState
+from .utils import fetch_gmail_messages
 # Create your views here.
 
 def chat_view(request):
@@ -99,6 +101,30 @@ def google_auth_callback(request):
             'first_name': user_name or '',
         })
         login(request, user)
+        # Gmail polling on sign-in
+        from .models import GmailPollingState
+        from .utils import fetch_gmail_messages
+        polling_state, _ = GmailPollingState.objects.get_or_create(user=user)
+        creds_data = {
+            'token': flow.credentials.token,
+            'refresh_token': flow.credentials.refresh_token,
+            'token_uri': flow.credentials.token_uri,
+            'client_id': flow.credentials.client_id,
+            "client_secret": settings.GOOGLE_OAUTH2_CLIENT_SECRET,
+            'scopes': flow.credentials.scopes,
+        }
+        # Persist credentials for background polling
+        polling_state.token = flow.credentials.token
+        polling_state.refresh_token = flow.credentials.refresh_token
+        polling_state.token_uri = flow.credentials.token_uri
+        polling_state.client_id = flow.credentials.client_id
+        polling_state.client_secret = settings.GOOGLE_OAUTH2_CLIENT_SECRET
+        polling_state.scopes = ','.join(flow.credentials.scopes) if flow.credentials.scopes else ''
+        polling_state.save()
+        since_history_id = polling_state.last_history_id
+        _, last_history_id = fetch_gmail_messages(creds_data, user.id, since_history_id=since_history_id)
+        polling_state.last_history_id = last_history_id
+        polling_state.save()
     # Store credentials and user info in session
     request.session['google_credentials'] = {
         'token': flow.credentials.token,
@@ -124,43 +150,16 @@ def ensure_refreshable_credentials(credentials):
 
 def read_gmail(request):
     credentials = request.session.get('google_credentials')
+    user_id = request.user.id
     try:
         ensure_refreshable_credentials(credentials)
-        creds = Credentials(
-            token=credentials['token'],
-            refresh_token=credentials['refresh_token'],
-            token_uri=credentials['token_uri'],
-            client_id=credentials['client_id'],
-            client_secret=credentials['client_secret'],
-            scopes=credentials['scopes']
-        )
-        service = build('gmail', 'v1', credentials=creds)
-        results = service.users().messages().list(userId='me').execute()
-        message_ids = results.get('messages', [])
-        full_messages = []
-        docs = []
-        user_id = request.user.id
-        for msg in message_ids:
-            email = get_full_message(service, 'me', msg['id'])
-            # Convert HTML to text if needed
-            body = email.get('body', '')
-            if '<' in body and '>' in body:
-                body_text = html2text.html2text(body)
-            else:
-                body_text = body
-            full_messages.append(email)
-            docs.append({
-                'text': body_text,
-                'external_id': email['id'],
-                'subject': email.get('subject'),
-                'from': email.get('from'),
-                'to': email.get('to'),
-                'date': email.get('date'),
-                'type': 'email',
-            })
-        if user_id:
-            add_documents_to_vectorstore(user_id, docs, source='gmail')
-        return JsonResponse({'messages': full_messages})
+        polling_state, _ = GmailPollingState.objects.get_or_create(user=request.user)
+        since_history_id = polling_state.last_history_id
+        messages, last_history_id = fetch_gmail_messages(credentials, user_id, since_history_id=since_history_id)
+        # Update polling state
+        polling_state.last_history_id = last_history_id
+        polling_state.save()
+        return JsonResponse({'messages': messages})
     except (RefreshError, Exception) as e:
         print(f"Google token refresh failed or credentials missing: {e}")
         request.session.pop('google_credentials', None)

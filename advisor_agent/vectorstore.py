@@ -43,6 +43,7 @@ def add_documents_to_vectorstore(user_id, docs, source):
         ids.append(f"{user_id_str}:{source}:{doc['external_id']}")
     if texts:
         vectorstore.add_texts(texts, metadatas=metadatas, ids=ids)
+        print(f"Added {docs} for {user_id}")
 
 def query_user_documents(user_id, query, top_k=5, type=None):
     """

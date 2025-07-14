@@ -5,6 +5,7 @@ from .utils import create_google_calendar_event
 from django.conf import settings
 from google.oauth2.credentials import Credentials
 from .utils import send_gmail_message
+from .vectorstore import query_user_documents
 
 def add_ongoing_instruction(user_id, instruction):
     # TODO: Save instruction to DB or local store
@@ -23,8 +24,17 @@ def get_contacts(user_id):
 
 def get_recent_emails(user_id):
     print(f"[TOOL] Get recent emails for user {user_id}")
-    results = vectorstore.similarity_search("recent emails", k=5, filter={"type": "email"})
-    return [doc.metadata.get("subject", doc.page_content) for doc in results]
+    # Use query_user_documents for correct filtering
+    result = query_user_documents(user_id, "recent emails", top_k=5, type="email")
+    docs = result.get('documents', [])
+    metadatas = result.get('metadatas', [])
+    # Return subject if available, else page_content
+    emails = []
+    for doc, meta in zip(docs, metadatas):
+        meta_dict = meta[0] if meta else {}
+        subject = meta_dict.get('subject')
+        emails.append(subject if subject else doc[0])
+    return emails
 
 def get_upcoming_events(user_id):
     print(f"[TOOL] Get upcoming events for user {user_id}")

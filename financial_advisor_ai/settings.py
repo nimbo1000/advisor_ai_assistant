@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'advisor_agent',
     'channels',
+    'django_crontab',
 ]
 
 MIDDLEWARE = [
@@ -157,3 +158,7 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer"
     }
 }
+
+CRONJOBS = [
+    ('* * * * *', 'django.core.management.call_command', ['poll_gmail']),
+]

@@ -46,3 +46,29 @@ class OngoingInstruction(models.Model):
     def __str__(self):
         return f"{self.user}: {self.instruction[:50]}..."
 
+
+class GmailPollingState(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='gmail_polling_state')
+    last_history_id = models.CharField(max_length=128, blank=True, null=True)
+    last_polled = models.DateTimeField(auto_now=True)
+    # Google OAuth credentials for background polling
+    token = models.CharField(max_length=512, blank=True, null=True)
+    refresh_token = models.CharField(max_length=512, blank=True, null=True)
+    token_uri = models.CharField(max_length=512, blank=True, null=True)
+    client_id = models.CharField(max_length=512, blank=True, null=True)
+    client_secret = models.CharField(max_length=512, blank=True, null=True)
+    scopes = models.TextField(blank=True, null=True)  # Store as comma-separated string
+
+    def get_google_credentials(self):
+        if not all([self.token, self.refresh_token, self.token_uri, self.client_id, self.client_secret, self.scopes]):
+            return None
+        scopes_str = str(self.scopes) if self.scopes else ''
+        return {
+            'token': self.token,
+            'refresh_token': self.refresh_token,
+            'token_uri': self.token_uri,
+            'client_id': self.client_id,
+            'client_secret': self.client_secret,
+            'scopes': [s.strip() for s in scopes_str.split(',') if s.strip()],
+        }
+
