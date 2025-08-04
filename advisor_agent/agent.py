@@ -75,6 +75,7 @@ agent_executor = initialize_agent(
     llm,
     agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
     verbose=True,
+    handle_parsing_errors=True,
 )
 
 def agent_respond(user_id, message, creds_data=None):

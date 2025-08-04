@@ -32,6 +32,7 @@ from .vectorstore import add_documents_to_vectorstore
 from .agent import agent_respond
 from .tools import get_ongoing_instructions
 from .utils import create_hubspot_contact, create_hubspot_note
+import logging
 
 # Create your views here.
 
@@ -136,15 +137,23 @@ def google_auth_callback(request):
         polling_state.client_secret = settings.GOOGLE_OAUTH2_CLIENT_SECRET
         polling_state.scopes = ','.join(flow.credentials.scopes) if flow.credentials.scopes else ''
         polling_state.save()
-        since_history_id = polling_state.last_history_id
-        _, last_history_id = fetch_gmail_messages(creds_data, user.id, since_history_id=since_history_id)
-        polling_state.last_history_id = last_history_id
-        polling_state.save()
-        # Fetch and store calendar events after login
-        fetch_calendar_events(creds_data, user.id)
-        # Register Google Calendar webhook for this user
-        webhook_url = settings.BASE_URL + '/webhooks/google-calendar/'
-        register_calendar_webhook(flow.credentials, webhook_url, user.id)
+        # Wrap all external service calls in try/except and log errors
+        try:
+            since_history_id = polling_state.last_history_id
+            _, last_history_id = fetch_gmail_messages(creds_data, user.id, since_history_id=since_history_id)
+            polling_state.last_history_id = last_history_id
+            polling_state.save()
+        except Exception as e:
+            logging.exception(f"Failed to fetch Gmail messages for user {user.id}: {e}")
+        try:
+            fetch_calendar_events(creds_data, user.id)
+        except Exception as e:
+            logging.exception(f"Failed to fetch Google Calendar events for user {user.id}: {e}")
+        try:
+            webhook_url = settings.BASE_URL + '/webhooks/google-calendar/'
+            register_calendar_webhook(flow.credentials, webhook_url, user.id)
+        except Exception as e:
+            logging.exception(f"Failed to register Google Calendar webhook for user {user.id}: {e}")
     # Store credentials and user info in session
     request.session['google_credentials'] = {
         'token': flow.credentials.token,
@@ -256,6 +265,7 @@ def hubspot_auth(request):
 
 # @login_required
 def hubspot_callback(request):
+    import logging
     code = request.GET.get('code')
     if not code:
         return render(request, 'error.html', {'error': 'Authorization failed'})
@@ -266,33 +276,45 @@ def hubspot_callback(request):
         'redirect_uri': settings.HUBSPOT_REDIRECT_URI,
         'code': code
     }
-    response = requests.post(HUBSPOT_TOKEN_URL, data=data)
-    if response.status_code != 200:
+    try:
+        response = requests.post(HUBSPOT_TOKEN_URL, data=data)
+        if response.status_code != 200:
+            return render(request, 'error.html', {'error': 'Token exchange failed'})
+        token_data = response.json()
+    except Exception as e:
+        logging.exception(f"Failed to exchange HubSpot token: {e}")
         return render(request, 'error.html', {'error': 'Token exchange failed'})
-    token_data = response.json()
     # Fetch HubSpot user/portal ID
     access_token = token_data['access_token']
     user_id = None
     portal_id = None
-    userinfo_resp = requests.get(
-        'https://api.hubapi.com/integrations/v1/me',
-        headers={'Authorization': f'Bearer {access_token}'}
-    )
-    if userinfo_resp.status_code == 200:
-        userinfo = userinfo_resp.json()
-        user_id = userinfo.get('user_id')
-        portal_id = userinfo.get('portalId')
-    HubspotIntegration.objects.update_or_create(
-        user=request.user,
-        defaults={
-            'access_token': token_data['access_token'],
-            'refresh_token': token_data['refresh_token'],
-            'expires_in': token_data['expires_in'],
-            'hubspot_user_id': str(user_id or portal_id) if (user_id or portal_id) else None,
-        }
-    )
-    # Automatically fetch and store contacts/notes after authentication
-    fetch_hubspot_contacts_and_notes(request.user)
+    try:
+        userinfo_resp = requests.get(
+            'https://api.hubapi.com/integrations/v1/me',
+            headers={'Authorization': f'Bearer {access_token}'}
+        )
+        if userinfo_resp.status_code == 200:
+            userinfo = userinfo_resp.json()
+            user_id = userinfo.get('user_id')
+            portal_id = userinfo.get('portalId')
+    except Exception as e:
+        logging.exception(f"Failed to fetch HubSpot user info: {e}")
+    try:
+        HubspotIntegration.objects.update_or_create(
+            user=request.user,
+            defaults={
+                'access_token': token_data['access_token'],
+                'refresh_token': token_data['refresh_token'],
+                'expires_in': token_data['expires_in'],
+                'hubspot_user_id': str(user_id or portal_id) if (user_id or portal_id) else None,
+            }
+        )
+    except Exception as e:
+        logging.exception(f"Failed to update or create HubspotIntegration for user {request.user.id}: {e}")
+    try:
+        fetch_hubspot_contacts_and_notes(request.user)
+    except Exception as e:
+        logging.exception(f"Failed to fetch and store HubSpot contacts/notes for user {request.user.id}: {e}")
     return redirect('hubspot_contacts')
 
 def refresh_tokens(user):
